@@ -178,35 +178,32 @@ pub fn derive_key_pbkdf2_sha512(
 
 /// Decrypt with Blowfish-CBC (zero IV)
 pub fn decrypt_blowfish_cbc(key: &[u8], encrypted: &[u8]) -> Result<Vec<u8>> {
-    use cipher::{BlockDecryptMut, KeyIvInit};
+    use cipher::{BlockModeDecrypt, KeyIvInit};
 
     type BlowfishCbc = cbc::Decryptor<blowfish::Blowfish>;
 
-    let cipher = BlowfishCbc::new_from_slices(key, &[0u8; BLOWFISH_BLOCK_SIZE])
-        .map_err(|_| Error::DecryptionFailed)?;
-
     let mut decrypted = encrypted.to_vec();
-    cipher
-        .decrypt_padded_mut::<cipher::block_padding::NoPadding>(&mut decrypted)
+    let result = BlowfishCbc::new_from_slices(key, &[0u8; BLOWFISH_BLOCK_SIZE])
+        .map_err(|_| Error::DecryptionFailed)?
+        .decrypt_padded::<cipher::block_padding::NoPadding>(&mut decrypted)
         .map_err(|_| Error::DecryptionFailed)?;
 
-    Ok(decrypted)
+    Ok(result.to_vec())
 }
 
 /// Decrypt with Blowfish-ECB (legacy format)
 pub fn decrypt_blowfish_ecb(key: &[u8], encrypted: &[u8]) -> Result<Vec<u8>> {
-    use cipher::{BlockDecryptMut, KeyInit};
+    use cipher::{BlockModeDecrypt, KeyInit};
 
     type BlowfishEcb = ecb::Decryptor<blowfish::Blowfish>;
 
-    let cipher = BlowfishEcb::new_from_slice(key).map_err(|_| Error::DecryptionFailed)?;
-
     let mut decrypted = encrypted.to_vec();
-    cipher
-        .decrypt_padded_mut::<cipher::block_padding::NoPadding>(&mut decrypted)
+    let result = BlowfishEcb::new_from_slice(key)
+        .map_err(|_| Error::DecryptionFailed)?
+        .decrypt_padded::<cipher::block_padding::NoPadding>(&mut decrypted)
         .map_err(|_| Error::DecryptionFailed)?;
 
-    Ok(decrypted)
+    Ok(result.to_vec())
 }
 
 /// Validate SHA-1 hash using KWallet's buggy implementation

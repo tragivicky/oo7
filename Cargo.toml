@@ -29,25 +29,25 @@ exclude = ["org.freedesktop.Secrets.xml"]
 [workspace.dependencies]
 ashpd = { version = "0.13", default-features = false }
 base64 = "0.22"
-cbc = "0.1"
+cbc = "0.2"
 clap = { version = "4.5", features = ["cargo", "derive"] }
 endi = "1.1"
 futures-channel = "0.3"
 futures-lite = "2.6"
 futures-util = "0.3"
-hkdf = "0.12"
+hkdf = "0.13"
 libc = "0.2"
-md-5 = "0.10"
+md-5 = "0.11"
 num = "0.4.0"
 num-bigint-dig = { version = "0.9", features = ["zeroize"] }
 oo7 = { path = "client", version = "0.6.0-alpha", default-features = false, features = ["unstable", "tracing"] }
 openssl = "0.10"
-pbkdf2 = { version = "0.12", default-features = false }
+pbkdf2 = { version = "0.13", default-features = false }
 rpassword = "7.4"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 serde_repr = "0.1"
-sha2 = "0.10"
+sha2 = "0.11"
 tempfile = "3.26"
 tokio = { version = "1.52", default-features = false }
 tracing = "0.1"

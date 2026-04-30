@@ -8,8 +8,6 @@ pub enum Error {
     Openssl(openssl::error::ErrorStack),
     #[cfg(feature = "native_crypto")]
     PadError(cipher::inout::PadError),
-    #[cfg(feature = "native_crypto")]
-    UnpadError(cipher::block_padding::UnpadError),
     Getrandom(getrandom::Error),
 }
 
@@ -17,13 +15,6 @@ pub enum Error {
 impl From<openssl::error::ErrorStack> for Error {
     fn from(value: openssl::error::ErrorStack) -> Self {
         Self::Openssl(value)
-    }
-}
-
-#[cfg(feature = "native_crypto")]
-impl From<cipher::block_padding::UnpadError> for Error {
-    fn from(value: cipher::block_padding::UnpadError) -> Self {
-        Self::UnpadError(value)
     }
 }
 
@@ -46,7 +37,7 @@ impl std::error::Error for Error {
             #[cfg(feature = "openssl_crypto")]
             Self::Openssl(e) => Some(e),
             #[cfg(feature = "native_crypto")]
-            Self::UnpadError(_) | Self::PadError(_) => None,
+            Self::PadError(_) => None,
             Self::Getrandom(_) => None,
         }
     }
@@ -58,10 +49,15 @@ impl std::fmt::Display for Error {
             #[cfg(feature = "openssl_crypto")]
             Self::Openssl(e) => f.write_fmt(format_args!("Openssl error: {e}")),
             #[cfg(feature = "native_crypto")]
-            Self::UnpadError(e) => f.write_fmt(format_args!("Wrong padding error: {e}")),
-            #[cfg(feature = "native_crypto")]
             Self::PadError(e) => f.write_fmt(format_args!("Wrong padding error: {e}")),
             Self::Getrandom(e) => f.write_fmt(format_args!("Random number generation error: {e}")),
         }
+    }
+}
+
+#[cfg(feature = "native_crypto")]
+impl From<cipher::block_padding::Error> for Error {
+    fn from(_value: cipher::block_padding::Error) -> Self {
+        Self::PadError(cipher::inout::PadError)
     }
 }

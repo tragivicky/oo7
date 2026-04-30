@@ -4,7 +4,7 @@ use std::{
 };
 
 use cbc::cipher::{
-    BlockDecryptMut, BlockEncryptMut, BlockSizeUser, IvSizeUser, KeyIvInit, KeySizeUser,
+    BlockModeDecrypt, BlockModeEncrypt, BlockSizeUser, IvSizeUser, KeyInit, KeyIvInit, KeySizeUser,
     block_padding::{NoPadding, Pkcs7},
 };
 use hkdf::Hkdf;
@@ -34,14 +34,11 @@ pub fn encrypt(
 
     // Unwrapping since adding `CIPHER_BLOCK_SIZE` to array is enough space for
     // PKCS7
-    let encrypted_len = EncAlg::new_from_slices(key.as_ref(), iv.as_ref())
+    let encrypted = EncAlg::new_from_slices(key.as_ref(), iv.as_ref())
         .expect("Invalid key length")
-        .encrypt_padded_b2b_mut::<Pkcs7>(data.as_ref(), &mut blob)?
-        .len();
+        .encrypt_padded_b2b::<Pkcs7>(data.as_ref(), &mut blob)?;
 
-    blob.truncate(encrypted_len);
-
-    Ok(blob)
+    Ok(encrypted.to_vec())
 }
 
 pub fn decrypt(
@@ -51,11 +48,11 @@ pub fn decrypt(
 ) -> Result<Zeroizing<Vec<u8>>, super::Error> {
     let mut data = blob.as_ref().to_vec();
 
-    Ok(DecAlg::new_from_slices(key.as_ref(), iv.as_ref())
+    let decrypted = DecAlg::new_from_slices(key.as_ref(), iv.as_ref())
         .expect("Invalid key length")
-        .decrypt_padded_mut::<Pkcs7>(&mut data)?
-        .to_vec()
-        .into())
+        .decrypt_padded::<Pkcs7>(&mut data)?;
+
+    Ok(decrypted.to_vec().into())
 }
 
 pub(crate) fn decrypt_no_padding(
@@ -65,11 +62,11 @@ pub(crate) fn decrypt_no_padding(
 ) -> Result<Zeroizing<Vec<u8>>, super::Error> {
     let mut data = blob.as_ref().to_vec();
 
-    Ok(DecAlg::new_from_slices(key.as_ref(), iv.as_ref())
+    let decrypted = DecAlg::new_from_slices(key.as_ref(), iv.as_ref())
         .expect("Invalid key length")
-        .decrypt_padded_mut::<NoPadding>(&mut data)?
-        .to_vec()
-        .into())
+        .decrypt_padded::<NoPadding>(&mut data)?;
+
+    Ok(decrypted.to_vec().into())
 }
 
 pub(crate) fn iv_len() -> usize {
