@@ -19,7 +19,7 @@ cbc.workspace = true
 cipher = { version = "0.5", features = ["block-padding"] }
 ecb = "0.2"
 md-5.workspace = true
-pbkdf2 = { workspace = true, default-features = false }
+pbkdf2 = { workspace = true, default-features = false, features = ["hmac"] }
 serde.workspace = true
 serde_json.workspace = true
 sha1 = "0.11"
