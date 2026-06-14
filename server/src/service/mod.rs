@@ -523,7 +523,11 @@ impl Service {
         }
     }
 
-    pub async fn run(secret: Option<Secret>, request_replacement: bool) -> Result<(), Error> {
+    pub async fn run(
+        secret: Option<Secret>,
+        request_replacement: bool,
+        wait_for_dbus: bool,
+    ) -> Result<(), Error> {
         // Compute data directory from environment variables
         let data_dir = std::env::var_os("XDG_DATA_HOME")
             .and_then(|h| if h.is_empty() { None } else { Some(h) })
@@ -547,16 +551,78 @@ impl Service {
 
         let service = Self::new(data_dir, pam_socket);
 
-        let connection = zbus::connection::Builder::session()?
-            .allow_name_replacements(true)
-            .replace_existing_names(request_replacement)
-            .name(oo7::dbus::api::Service::DESTINATION.as_deref().unwrap())?
-            .serve_at(
-                oo7::dbus::api::Service::PATH.as_deref().unwrap(),
-                service.clone(),
-            )?
-            .build()
-            .await?;
+        // Start PAM listener early so it can buffer secrets arriving before
+        // D-Bus is ready (e.g. during PAM-initiated login startup).
+        tracing::info!("Starting PAM listener");
+        let pam_listener = crate::pam_listener::PamListener::new(service.clone());
+        let pam_listener_replay = pam_listener.clone();
+        tokio::spawn(async move {
+            if let Err(e) = pam_listener.start().await {
+                tracing::error!("PAM listener error: {}", e);
+            }
+        });
+
+        // When started by PAM (stdin piped), the D-Bus session bus may not be
+        // ready yet. Retry for up to 30 seconds like gnome-keyring does.
+        let connection = if wait_for_dbus {
+            let mut last_err = None;
+            let mut conn = None;
+            for attempt in 1..=60 {
+                match zbus::connection::Builder::session() {
+                    Ok(builder) => {
+                        match builder
+                            .allow_name_replacements(true)
+                            .replace_existing_names(request_replacement)
+                            .name(oo7::dbus::api::Service::DESTINATION.as_deref().unwrap())
+                            .expect("hardcoded destination")
+                            .serve_at(
+                                oo7::dbus::api::Service::PATH.as_deref().unwrap(),
+                                service.clone(),
+                            )
+                            .expect("hardcoded path")
+                            .build()
+                            .await
+                        {
+                            Ok(c) => {
+                                conn = Some(c);
+                                break;
+                            }
+                            Err(e) if !matches!(e, zbus::Error::NameTaken) => {
+                                tracing::debug!(
+                                    "D-Bus not ready (attempt {attempt}/60): {e}, retrying in 500ms"
+                                );
+                                last_err = Some(e);
+                                tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+                            }
+                            Err(e) => return Err(Error::Zbus(e)),
+                        }
+                    }
+                    Err(e) => {
+                        tracing::debug!(
+                            "D-Bus not ready (attempt {attempt}/60): {e}, retrying in 500ms"
+                        );
+                        last_err = Some(e);
+                        tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+                    }
+                }
+            }
+            conn.ok_or_else(|| {
+                Error::Zbus(last_err.unwrap_or(zbus::Error::Failure(
+                    "D-Bus session bus not available after 30s".into(),
+                )))
+            })?
+        } else {
+            zbus::connection::Builder::session()?
+                .allow_name_replacements(true)
+                .replace_existing_names(request_replacement)
+                .name(oo7::dbus::api::Service::DESTINATION.as_deref().unwrap())?
+                .serve_at(
+                    oo7::dbus::api::Service::PATH.as_deref().unwrap(),
+                    service.clone(),
+                )?
+                .build()
+                .await?
+        };
 
         #[cfg(any(feature = "gnome_native_crypto", feature = "gnome_openssl_crypto"))]
         connection
@@ -574,14 +640,8 @@ impl Service {
             .initialize(connection, discovered_keyrings, secret, true)
             .await?;
 
-        // Start PAM listener
-        tracing::info!("Starting PAM listener");
-        let pam_listener = crate::pam_listener::PamListener::new(service.clone());
-        tokio::spawn(async move {
-            if let Err(e) = pam_listener.start().await {
-                tracing::error!("PAM listener error: {}", e);
-            }
-        });
+        // Replay any secrets that the PAM listener buffered during startup
+        pam_listener_replay.replay_buffered_secrets().await;
 
         Ok(())
     }

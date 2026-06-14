@@ -274,6 +274,24 @@ impl PamListener {
         Ok(())
     }
 
+    /// Replay any secrets buffered before collections were initialized.
+    pub async fn replay_buffered_secrets(&self) {
+        let secrets = self.user_secrets.read().await;
+        if secrets.is_empty() {
+            return;
+        }
+        tracing::info!(
+            "Replaying {} buffered secret(s) received during startup",
+            secrets.len()
+        );
+        for (username, secret) in secrets.iter() {
+            match self.try_unlock_collections(secret).await {
+                Ok(_) => tracing::info!("Replayed unlock for user: {}", username),
+                Err(e) => tracing::warn!("Failed to replay unlock for user {}: {}", username, e),
+            }
+        }
+    }
+
     async fn try_unlock_collections(&self, secret: &Secret) -> Result<(), Error> {
         // First, try to migrate any pending v0 keyrings
         let migrated = self.service.migrate_pending_keyrings(secret).await;
@@ -401,14 +419,6 @@ impl PamListener {
         }
 
         Ok(changed_count)
-    }
-}
-
-impl Drop for PamListener {
-    fn drop(&mut self) {
-        if self.socket_path.exists() {
-            let _ = std::fs::remove_file(&self.socket_path);
-        }
     }
 }
 

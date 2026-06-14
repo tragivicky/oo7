@@ -99,7 +99,8 @@ async fn inner_main(args: Args) -> Result<(), Error> {
     tracing::info!("Starting {BINARY_NAME}");
 
     if let Some((secret, should_error_out)) = secret_info {
-        let res = Service::run(Some(secret), args.replace).await;
+        let wait_for_dbus = matches!(should_error_out, ShouldErrorOut::No);
+        let res = Service::run(Some(secret), args.replace, wait_for_dbus).await;
         match res {
             Ok(()) => (),
             // Wrong password provided via system credentials
@@ -119,7 +120,7 @@ async fn inner_main(args: Args) -> Result<(), Error> {
             Err(err) => Err(err)?,
         }
     } else {
-        Service::run(None, args.replace).await?;
+        Service::run(None, args.replace, false).await?;
     }
 
     tracing::debug!("Starting loop");

@@ -143,25 +143,48 @@ pub fn send_secret_to_daemon(
     }
 }
 
-/// Start the oo7-daemon for the current user
-fn start_daemon() -> Result<(), SocketError> {
-    tracing::info!("Attempting to start oo7-daemon directly");
+/// Start the oo7-daemon with --login, passing the secret via stdin pipe.
+///
+/// Like gnome-keyring, we pipe the login password to the daemon's stdin so it
+/// can unlock the keyring once the D-Bus session bus becomes available.
+fn start_daemon_with_login(secret: &[u8], uid: u32) -> Result<(), SocketError> {
+    tracing::info!("Starting oo7-daemon with --login, passing secret via stdin");
 
-    // Fork and exec the daemon directly (like gnome-keyring does)
-    // We can't use systemctl --user here because the user session bus isn't ready
-    // yet
+    let mut pipe_fds = [0 as libc::c_int; 2];
+    if unsafe { libc::pipe(pipe_fds.as_mut_ptr()) } < 0 {
+        return Err(SocketError::Connect(io::Error::last_os_error()));
+    }
+    let pipe_read = pipe_fds[0];
+    let pipe_write = pipe_fds[1];
+
     match unsafe { libc::fork() } {
         -1 => {
-            tracing::error!("Failed to fork process");
+            unsafe {
+                libc::close(pipe_read);
+                libc::close(pipe_write);
+            }
             Err(SocketError::Connect(io::Error::last_os_error()))
         }
         0 => {
-            // Child process - exec oo7-daemon
-            // Close stdin, stdout, stderr and reopen to /dev/null
+            // Child process — becomes the daemon
             unsafe {
+                libc::close(pipe_write);
+
+                // Set HOME from passwd entry so the daemon can find keyrings
+                let pw = libc::getpwuid(uid);
+                if !pw.is_null() && !(*pw).pw_dir.is_null() {
+                    libc::setenv(c"HOME".as_ptr(), (*pw).pw_dir, 1);
+                }
+
+                // Pipe becomes stdin
+                libc::dup2(pipe_read, 0);
+                if pipe_read > 0 {
+                    libc::close(pipe_read);
+                }
+
+                // stdout/stderr to /dev/null
                 let dev_null = libc::open(c"/dev/null".as_ptr(), libc::O_RDWR);
                 if dev_null >= 0 {
-                    libc::dup2(dev_null, 0);
                     libc::dup2(dev_null, 1);
                     libc::dup2(dev_null, 2);
                     if dev_null > 2 {
@@ -171,16 +194,34 @@ fn start_daemon() -> Result<(), SocketError> {
 
                 // Exec the daemon
                 let daemon_path = c"/usr/bin/oo7-daemon".as_ptr();
-                let args = [daemon_path, std::ptr::null()];
+                let login_flag = c"--login".as_ptr();
+                let args = [daemon_path, login_flag, std::ptr::null()];
                 libc::execv(daemon_path, args.as_ptr());
 
-                // If exec fails, exit the child process
                 libc::_exit(1);
             }
         }
         child_pid => {
-            // Parent process - daemon is starting in background
-            tracing::info!("Started oo7-daemon with PID {}", child_pid);
+            //  Write secret to pipe and close
+            unsafe {
+                libc::close(pipe_read);
+
+                let mut written = 0;
+                while written < secret.len() {
+                    let n = libc::write(
+                        pipe_write,
+                        secret.as_ptr().add(written) as *const libc::c_void,
+                        secret.len() - written,
+                    );
+                    if n <= 0 {
+                        break;
+                    }
+                    written += n as usize;
+                }
+                libc::close(pipe_write);
+            }
+
+            tracing::info!("Started oo7-daemon with PID {child_pid}, secret piped via stdin");
             Ok(())
         }
     }
@@ -198,57 +239,28 @@ async fn send_secret_to_daemon_async(
 
     tracing::debug!("Connecting to daemon socket at: {}", socket_path.display());
 
-    // Try to connect with retries if auto_start is enabled
-    // We don't check if socket exists to avoid SELinux getattr denials
-    let mut stream = None;
-    let max_retries = if auto_start { 20 } else { 1 }; // 20 * 100ms = 2 seconds
-    let mut daemon_started = false;
-
-    for attempt in 0..max_retries {
-        match timeout(
-            Duration::from_millis(SOCKET_TIMEOUT_MS),
-            UnixStream::connect(&socket_path),
-        )
-        .await
-        {
-            Ok(Ok(s)) => {
-                stream = Some(s);
-                if daemon_started {
-                    tracing::info!("Successfully connected to daemon socket");
-                }
-                break;
-            }
-            Ok(Err(e)) if e.kind() == io::ErrorKind::NotFound && auto_start && !daemon_started => {
-                // Socket doesn't exist yet, start daemon on first attempt
-                tracing::info!("Socket not found, attempting to start daemon");
-                start_daemon()?;
-                daemon_started = true;
-                tokio::time::sleep(Duration::from_millis(100)).await;
-            }
-            Ok(Err(e))
-                if (e.kind() == io::ErrorKind::NotFound
-                    || e.kind() == io::ErrorKind::ConnectionRefused)
-                    && auto_start
-                    && attempt + 1 < max_retries =>
-            {
-                // Socket not ready yet, retry
-                tokio::time::sleep(Duration::from_millis(100)).await;
-            }
-            Ok(Err(e)) => {
-                return Err(SocketError::Connect(e));
-            }
-            Err(_) => {
-                return Err(SocketError::Timeout);
-            }
+    // Try to connect to an already-running daemon's socket.
+    // If auto_start is set and no daemon is running, start one with --login and
+    // pipe the secret via stdin (like gnome-keyring), returning immediately.
+    let mut stream = match timeout(
+        Duration::from_millis(SOCKET_TIMEOUT_MS),
+        UnixStream::connect(&socket_path),
+    )
+    .await
+    {
+        Ok(Ok(s)) => s,
+        Ok(Err(e)) if e.kind() == io::ErrorKind::NotFound && auto_start => {
+            tracing::info!("Socket not found, starting daemon with --login");
+            start_daemon_with_login(&message.new_secret, uid)?;
+            return Ok(());
         }
-    }
-
-    let mut stream = stream.ok_or_else(|| {
-        SocketError::Connect(io::Error::new(
-            io::ErrorKind::NotFound,
-            "Failed to connect to daemon socket after retries",
-        ))
-    })?;
+        Ok(Err(e)) => {
+            return Err(SocketError::Connect(e));
+        }
+        Err(_) => {
+            return Err(SocketError::Timeout);
+        }
+    };
 
     tracing::debug!("Connected to daemon socket");
 
