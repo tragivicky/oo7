@@ -193,7 +193,7 @@ fn start_daemon_with_login(secret: &[u8], uid: u32) -> Result<(), SocketError> {
                 }
 
                 // Exec the daemon
-                let daemon_path = c"/usr/bin/oo7-daemon".as_ptr();
+                let daemon_path = c"/usr/libexec/oo7-daemon".as_ptr();
                 let login_flag = c"--login".as_ptr();
                 let args = [daemon_path, login_flag, std::ptr::null()];
                 libc::execv(daemon_path, args.as_ptr());

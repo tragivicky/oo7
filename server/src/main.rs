@@ -1,6 +1,7 @@
 #![deny(unsafe_code)]
 mod capability;
 mod collection;
+mod control;
 mod error;
 #[cfg(any(feature = "gnome_native_crypto", feature = "gnome_openssl_crypto"))]
 mod gnome;
@@ -93,14 +94,49 @@ async fn inner_main(args: Args) -> Result<(), Error> {
             }
         }
     } else {
+        // Check if a --login daemon is waiting on the control socket.
+        // If so, hand off our env vars and exit.
+        if control::CONTROL_SOCKET_PATH.exists() {
+            tracing::info!("Login daemon detected, handing off environment via control socket");
+            match control::handoff_to_login_daemon().await {
+                Ok(()) => return Ok(()),
+                Err(e) => {
+                    tracing::warn!(
+                        "Failed to hand off to login daemon: {e}, proceeding with normal startup"
+                    );
+                }
+            }
+        }
         None
     };
 
     tracing::info!("Starting {BINARY_NAME}");
 
     if let Some((secret, should_error_out)) = secret_info {
-        let wait_for_dbus = matches!(should_error_out, ShouldErrorOut::No);
-        let res = Service::run(Some(secret), args.replace, wait_for_dbus).await;
+        // PAM-started with piped stdin: wait for D-Bus env vars via control
+        // socket before connecting, so the single daemon can serve D-Bus.
+        if matches!(should_error_out, ShouldErrorOut::No) {
+            tracing::info!("Waiting for D-Bus environment via control socket");
+            match control::serve_control_socket().await {
+                Ok(env_vars) => {
+                    for (key, value) in &env_vars {
+                        // SAFETY: no other threads reading env vars yet —
+                        // tokio runtime is single-threaded at this point.
+                        #[allow(unsafe_code)]
+                        unsafe {
+                            std::env::set_var(key, value);
+                        }
+                        tracing::debug!("Set {key}={value}");
+                    }
+                }
+                Err(e) => {
+                    tracing::error!("Control socket failed: {e}");
+                    return Err(e);
+                }
+            }
+        }
+
+        let res = Service::run(Some(secret), args.replace).await;
         match res {
             Ok(()) => (),
             // Wrong password provided via system credentials
@@ -120,7 +156,7 @@ async fn inner_main(args: Args) -> Result<(), Error> {
             Err(err) => Err(err)?,
         }
     } else {
-        Service::run(None, args.replace, false).await?;
+        Service::run(None, args.replace).await?;
     }
 
     tracing::debug!("Starting loop");
