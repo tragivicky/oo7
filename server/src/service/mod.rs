@@ -1172,9 +1172,11 @@ impl Service {
         let collections = self.collections.lock().await;
 
         for object in objects {
+            let mut found = false;
             for (path, collection) in collections.iter() {
                 let collection_locked = collection.is_locked().await;
                 if *object == *path {
+                    found = true;
                     if collection_locked == locked {
                         tracing::debug!(
                             "Collection: {} is already {}.",
@@ -1192,6 +1194,7 @@ impl Service {
                     }
                     break;
                 } else if let Some(item) = collection.item_from_path(object).await {
+                    found = true;
                     // If collection is locked, can't perform any item lock/unlock operations
                     if collection_locked {
                         // Unlocking an item when collection is locked requires unlocking collection
@@ -1232,6 +1235,8 @@ impl Service {
                     }
                     break;
                 }
+            }
+            if !found {
                 tracing::warn!("Object: {} does not exist.", object);
             }
         }
