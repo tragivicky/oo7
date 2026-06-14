@@ -115,10 +115,10 @@ async fn inner_main(args: Args) -> Result<(), Error> {
     if let Some((secret, should_error_out)) = secret_info {
         // PAM-started with piped stdin: wait for D-Bus env vars via control
         // socket before connecting, so the single daemon can serve D-Bus.
-        if matches!(should_error_out, ShouldErrorOut::No) {
+        let handshake = if matches!(should_error_out, ShouldErrorOut::No) {
             tracing::info!("Waiting for D-Bus environment via control socket");
             match control::serve_control_socket().await {
-                Ok(env_vars) => {
+                Ok((env_vars, handshake)) => {
                     for (key, value) in &env_vars {
                         // SAFETY: no other threads reading env vars yet —
                         // tokio runtime is single-threaded at this point.
@@ -128,13 +128,16 @@ async fn inner_main(args: Args) -> Result<(), Error> {
                         }
                         tracing::debug!("Set {key}={value}");
                     }
+                    Some(handshake)
                 }
                 Err(e) => {
                     tracing::error!("Control socket failed: {e}");
                     return Err(e);
                 }
             }
-        }
+        } else {
+            None
+        };
 
         let res = Service::run(Some(secret), args.replace).await;
         match res {
@@ -154,6 +157,11 @@ async fn inner_main(args: Args) -> Result<(), Error> {
                 Err(Error::Zbus(zbus::Error::NameTaken))?
             }
             Err(err) => Err(err)?,
+        }
+
+        // Unblock the handoff process now that the D-Bus name is claimed.
+        if let Some(handshake) = handshake {
+            let _ = handshake.complete().await;
         }
     } else {
         Service::run(None, args.replace).await?;

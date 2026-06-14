@@ -23,10 +23,28 @@ pub static CONTROL_SOCKET_PATH: LazyLock<PathBuf> = LazyLock::new(|| {
     PathBuf::from(format!("/run/user/{uid}/oo7-control.sock"))
 });
 
+/// Pending control socket handshake. The response byte is deferred until the
+/// caller has finished initialization (e.g. claimed the D-Bus name), so the
+/// handoff process blocks until the login daemon is fully ready.
+pub struct ControlHandshake {
+    stream: tokio::net::UnixStream,
+}
+
+impl ControlHandshake {
+    pub async fn complete(mut self) -> Result<(), Error> {
+        self.stream.write_all(&[0]).await?;
+        self.stream.flush().await?;
+        let _ = tokio::fs::remove_file(&*CONTROL_SOCKET_PATH).await;
+        tracing::info!("Control handshake completed");
+        Ok(())
+    }
+}
+
 /// Wait for a D-Bus-activated daemon to send us environment variables via the
 /// control socket. Used by the `--login` daemon started by PAM before D-Bus is
-/// ready. Returns the received environment variables.
-pub async fn serve_control_socket() -> Result<HashMap<String, String>, Error> {
+/// ready. Returns the received environment variables and a handshake that must
+/// be completed after initialization to unblock the handoff process.
+pub async fn serve_control_socket() -> Result<(HashMap<String, String>, ControlHandshake), Error> {
     let path = &*CONTROL_SOCKET_PATH;
 
     if path.exists() {
@@ -89,19 +107,14 @@ pub async fn serve_control_socket() -> Result<HashMap<String, String>, Error> {
         }
     }
 
-    // Send success response
     drop(reader);
-    stream.write_all(&[0]).await?;
-    stream.flush().await?;
-
-    let _ = tokio::fs::remove_file(&path).await;
 
     tracing::info!(
         "Received initialization with {} env var(s) via control socket",
         env_vars.len()
     );
 
-    Ok(env_vars)
+    Ok((env_vars, ControlHandshake { stream }))
 }
 
 /// Connect to an existing `--login` daemon's control socket and send it our
