@@ -325,11 +325,18 @@ impl Service {
                             if is_locked {
                                 let _ = collection.set_locked(false, Some(secret.clone())).await;
                             } else {
-                                // Collection is already unlocked, just unlock the item
                                 let keyring = collection.keyring.read().await;
-                                let _ = item
-                                    .set_locked(false, keyring.as_ref().unwrap().as_unlocked())
-                                    .await;
+                                match keyring.as_ref() {
+                                    Some(k) if !k.is_locked() => {
+                                        let _ = item.set_locked(false, k.as_unlocked()).await;
+                                    }
+                                    _ => {
+                                        drop(keyring);
+                                        let _ = collection
+                                            .set_locked(false, Some(secret.clone()))
+                                            .await;
+                                    }
+                                }
                             }
                         }
                     }
@@ -1145,11 +1152,23 @@ impl Service {
                         );
                         without_prompt.push(object.clone());
                     } else {
-                        // Collection is unlocked, we can lock/unlock the item directly
                         let keyring = collection.keyring.read().await;
-                        item.set_locked(locked, keyring.as_ref().unwrap().as_unlocked())
-                            .await?;
-                        without_prompt.push(object.clone());
+                        match keyring.as_ref() {
+                            Some(k) if !k.is_locked() => {
+                                item.set_locked(locked, k.as_unlocked()).await?;
+                                without_prompt.push(object.clone());
+                            }
+                            _ => {
+                                if locked {
+                                    return Err(ServiceError::IsLocked(format!(
+                                        "Cannot lock item {} when collection is locked",
+                                        object
+                                    )));
+                                } else {
+                                    with_prompt.push(object.clone());
+                                }
+                            }
+                        }
                     }
                     break;
                 }
