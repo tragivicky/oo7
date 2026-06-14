@@ -1258,10 +1258,9 @@ impl Service {
     }
 
     pub async fn session_index(&self) -> u32 {
-        let n_sessions = *self.session_index.read().await + 1;
-        *self.session_index.write().await = n_sessions;
-
-        n_sessions
+        let mut guard = self.session_index.write().await;
+        *guard += 1;
+        *guard
     }
 
     async fn session_from_sender(&self, sender: &UniqueName<'_>) -> Option<Session> {
@@ -1289,10 +1288,9 @@ impl Service {
     }
 
     pub async fn prompt_index(&self) -> u32 {
-        let n_prompts = *self.prompt_index.read().await + 1;
-        *self.prompt_index.write().await = n_prompts;
-
-        n_prompts
+        let mut guard = self.prompt_index.write().await;
+        *guard += 1;
+        *guard
     }
 
     pub async fn prompt(&self, path: &ObjectPath<'_>) -> Option<Prompt> {
