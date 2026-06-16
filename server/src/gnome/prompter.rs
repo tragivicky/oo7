@@ -182,7 +182,7 @@ impl Properties {
             description: Some(
                 formatx!(
                     gettext("An application wants to create a new keyring called “{}”. Choose the password you want to use for it."),
-                    &label
+                    label
                 )
                 .expect("Wrong format in translatable string")
             ),
