@@ -2,7 +2,8 @@
 Description=Secret service (oo7 implementation)
 
 [Service]
-Type=simple
+Type=dbus
+BusName=@dbus_known_name@
 StandardError=journal
 ExecStart=@libexecdir@/@binary@
 Restart=on-failure
