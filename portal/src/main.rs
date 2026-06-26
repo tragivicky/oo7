@@ -1,4 +1,4 @@
-use std::{collections::HashMap, future::pending, os::unix::net::UnixStream, sync::Arc};
+use std::{collections::HashMap, future::pending, sync::Arc};
 mod error;
 
 use ashpd::{
@@ -77,17 +77,15 @@ async fn send_secret_to_app(app_id: &ashpd::MaybeAppID, fd: std::os::fd::OwnedFd
 
     let attributes = &[("app_id", app_id)];
 
-    // Write the secret to the FD.
-    let std_stream = UnixStream::from(fd);
-    std_stream.set_nonblocking(true)?;
-    let mut stream = tokio::net::UnixStream::from_std(std_stream)?;
+    // Write the secret to the FD (may be a pipe or a socket).
+    let mut file = tokio::fs::File::from_std(std::fs::File::from(fd));
 
     if collection.is_locked().await? {
         collection.unlock(None).await?;
     }
 
     if let Some(item) = collection.search_items(attributes).await?.first() {
-        stream.write_all(&item.secret().await?).await?;
+        file.write_all(&item.secret().await?).await?;
     } else {
         tracing::debug!("Could not find secret for {app_id}, creating one");
         let secret = oo7::Secret::random().unwrap();
@@ -102,7 +100,7 @@ async fn send_secret_to_app(app_id: &ashpd::MaybeAppID, fd: std::os::fd::OwnedFd
             )
             .await?;
 
-        stream.write_all(&secret).await?;
+        file.write_all(&secret).await?;
     }
 
     Ok(())
