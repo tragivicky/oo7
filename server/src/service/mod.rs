@@ -960,43 +960,20 @@ impl Service {
                     alias: alias.clone(),
                 };
 
-                if let Some(secret) = secret {
-                    tracing::debug!("Attempting immediate migration of v0 keyring '{name}'",);
-                    match UnlockedKeyring::open_at(&self.data_dir, name, Some(secret.clone())).await
-                    {
-                        Ok(unlocked) => {
-                            tracing::info!("Successfully migrated v0 keyring '{name}' to v1",);
-
-                            // Write the migrated keyring to disk
-                            unlocked.write().await?;
-                            tracing::info!("Wrote migrated keyring '{name}' to disk");
-
-                            // Remove the v0 keyring file after successful migration
-                            if let Err(e) = tokio::fs::remove_file(path).await {
-                                tracing::warn!(
-                                    "Failed to remove v0 keyring at {}: {e}",
-                                    path.display()
-                                );
-                            } else {
-                                tracing::info!("Removed v0 keyring file at {}", path.display());
-                            }
-
-                            return Ok((
-                                name.to_owned(),
-                                label,
-                                alias,
-                                Keyring::Unlocked(unlocked),
-                            ));
-                        }
-                        Err(e) => {
-                            tracing::warn!(
-                                "Failed to migrate v0 keyring '{name}': {e}. Creating locked placeholder collection.",
-                            );
-                        }
+                tracing::debug!("Attempting immediate migration of v0 keyring '{name}'",);
+                match migration.migrate(&self.data_dir, secret).await {
+                    Ok(unlocked) => {
+                        tracing::info!("Successfully migrated v0 keyring '{name}' to v1",);
+                        return Ok((name.to_owned(), label, alias, Keyring::Unlocked(unlocked)));
+                    }
+                    Err(e) => {
+                        tracing::warn!(
+                            "Failed to migrate v0 keyring '{name}': {e}. Creating locked placeholder collection.",
+                        );
                     }
                 }
 
-                // Migration failed or no secret - create locked placeholder and register for
+                // Migration failed - create locked placeholder and register for
                 // pending migration
                 tracing::debug!(
                     "Creating locked placeholder for v0 keyring '{}', will migrate on unlock",
