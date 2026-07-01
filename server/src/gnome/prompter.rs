@@ -20,6 +20,15 @@ use crate::{
 mod double_value_optional {
     use super::*;
 
+    fn unwrap_double_value<'de>(outer_value: Value<'de>) -> Result<Value<'de>, String> {
+        match outer_value.downcast_ref::<Value>() {
+            Ok(_) => outer_value
+                .downcast::<Value>()
+                .map_err(|e| format!("Failed to unwrap double-wrapped Value: {e}")),
+            Err(_) => Ok(outer_value),
+        }
+    }
+
     pub fn deserialize<'de, D, T>(deserializer: D) -> Result<Option<T>, D::Error>
     where
         D: serde::Deserializer<'de>,
@@ -27,18 +36,27 @@ mod double_value_optional {
         T::Error: std::fmt::Display,
     {
         let outer_value = Value::deserialize(deserializer)?;
-
-        // Try to downcast to check if it's double-wrapped
-        let value_to_deserialize = match outer_value.downcast_ref::<Value>() {
-            Ok(_) => outer_value.downcast::<Value>().map_err(|e| {
-                serde::de::Error::custom(format!("Failed to unwrap double-wrapped Value: {e}"))
-            })?,
-            Err(_) => outer_value,
-        };
+        let value_to_deserialize =
+            unwrap_double_value(outer_value).map_err(serde::de::Error::custom)?;
 
         match T::try_from(value_to_deserialize) {
             Ok(val) => Ok(Some(val)),
             Err(_) => Ok(None),
+        }
+    }
+
+    pub fn deserialize_window_id<'de, D>(
+        deserializer: D,
+    ) -> Result<Option<WindowIdentifierType>, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let outer_value = Value::deserialize(deserializer)?;
+        let value = unwrap_double_value(outer_value).map_err(serde::de::Error::custom)?;
+
+        match String::try_from(value) {
+            Ok(s) if !s.is_empty() => Ok(std::str::FromStr::from_str(&s).ok()),
+            _ => Ok(None),
         }
     }
 }
@@ -105,7 +123,8 @@ pub struct Properties {
     )]
     choice_chosen: Option<bool>,
     #[serde(
-        with = "as_value::optional",
+        serialize_with = "as_value::optional::serialize",
+        deserialize_with = "double_value_optional::deserialize_window_id",
         skip_serializing_if = "Option::is_none",
         default
     )]
