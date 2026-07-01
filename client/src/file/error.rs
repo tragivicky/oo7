@@ -116,7 +116,7 @@ impl std::fmt::Display for Error {
             Self::WeakKey(err) => write!(f, "{err}"),
             Self::Io(e) => write!(f, "IO error {e}"),
             Self::MacError => write!(f, "Mac digest is not equal to the expected value"),
-            Self::ChecksumMismatch => write!(f, "Checksum is not equal to the expected value"),
+            Self::ChecksumMismatch => write!(f, "Incorrect secret or corrupted keyring data"),
             Self::HashedAttributeMac(e) => write!(f, "Failed to validate hashed attribute {e}"),
             Self::NoDataDir => write!(f, "Couldn't retrieve XDG_DATA_DIR"),
             Self::TargetFileChanged(e) => write!(f, "The target file has changed {e}"),

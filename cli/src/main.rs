@@ -347,10 +347,44 @@ enum Commands {
 
     #[command(name = "repair", about = "Repair the keyring")]
     Repair,
+
+    #[command(
+        name = "migrate",
+        about = "Migrate a legacy keyring to the current format",
+        after_help = format!("{H_STYLE}Examples:{H_STYLE:#}\n  {} migrate ~/.local/share/keyrings/login.keyring\n  {0} migrate --format kwallet ~/.local/share/kwalletd/kdewallet.kwl", BINARY_NAME)
+    )]
+    Migrate {
+        #[arg(help = "Path to the legacy keyring file")]
+        file: PathBuf,
+        #[arg(short, long, default_value_t, help = "Format of the legacy keyring")]
+        format: MigrateFormat,
+    },
+}
+
+#[derive(Clone, Default, clap::ValueEnum, fmt::Debug)]
+enum MigrateFormat {
+    #[default]
+    V0,
+    #[cfg(feature = "kwallet_migration")]
+    Kwallet,
+}
+
+impl fmt::Display for MigrateFormat {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::V0 => write!(f, "v0"),
+            #[cfg(feature = "kwallet_migration")]
+            Self::Kwallet => write!(f, "kwallet"),
+        }
+    }
 }
 
 impl Commands {
     async fn execute(self, args: Arguments) -> Result<(), Error> {
+        if matches!(self, Commands::Migrate { .. }) {
+            return self.migrate(args.secret).await;
+        }
+
         let service = Service::new().await?;
         if args.app_id.is_some() && args.keyring.is_some() {
             return Err(Error::new(
@@ -434,6 +468,7 @@ impl Commands {
         };
 
         let output = match self {
+            Commands::Migrate { .. } => unreachable!(),
             Commands::Delete { attributes } => {
                 match keyring {
                     Keyring::Collection(collection) => {
@@ -640,6 +675,90 @@ impl Commands {
                         print!("{}", item);
                     }
                 }
+            }
+        }
+
+        Ok(())
+    }
+
+    async fn migrate(self, secret: Option<oo7::Secret>) -> Result<(), Error> {
+        let Self::Migrate { file, format } = self else {
+            unreachable!();
+        };
+        if !file.exists() {
+            return Err(Error::Owned(format!(
+                "File '{}' does not exist.",
+                file.display()
+            )));
+        }
+
+        let name = file
+            .file_stem()
+            .and_then(|s| s.to_str())
+            .ok_or_else(|| Error::new("Cannot determine keyring name from file path"))?;
+
+        let parent = file
+            .parent()
+            .ok_or_else(|| Error::new("Cannot determine parent directory of keyring file"))?;
+        let target_path = parent.join("v1").join(format!("{name}.keyring"));
+
+        match format {
+            MigrateFormat::V0 => {
+                let keyring =
+                    oo7::file::UnlockedKeyring::load_from_v0(&file, &target_path, secret).await?;
+                let n_items = keyring.n_items().await;
+                keyring.write().await?;
+
+                println!(
+                    "Migrated v0 keyring '{name}' ({n_items} items) to {}.",
+                    target_path.display()
+                );
+            }
+            #[cfg(feature = "kwallet_migration")]
+            MigrateFormat::Kwallet => {
+                let secret = secret.ok_or_else(|| {
+                    Error::new("KWallet migration requires a secret (use --secret)")
+                })?;
+
+                let path = file.to_path_buf();
+                let password = secret.to_vec();
+                let wallet = tokio::task::spawn_blocking(move || {
+                    kwallet_parser::KWalletFile::open(&path, &password)
+                })
+                .await
+                .map_err(|e| Error::Owned(format!("Task join error: {e}")))?
+                .map_err(|e| Error::Owned(format!("Failed to open KWallet file: {e}")))?;
+
+                let keyring =
+                    oo7::file::UnlockedKeyring::open_at(parent, name, Some(secret)).await?;
+
+                let mut n_items = 0usize;
+                for (folder_name, folder) in wallet.wallet() {
+                    for (entry_key, entry) in folder {
+                        match kwallet_parser::convert_entry(folder_name, entry_key, entry) {
+                            Ok(ss_entry) => {
+                                keyring
+                                    .create_item(
+                                        ss_entry.label(),
+                                        ss_entry.attributes(),
+                                        oo7::Secret::blob(ss_entry.secret()),
+                                        true,
+                                    )
+                                    .await?;
+                                n_items += 1;
+                            }
+                            Err(e) => {
+                                eprintln!("Skipping entry {folder_name}/{entry_key}: {e}");
+                            }
+                        }
+                    }
+                }
+                keyring.write().await?;
+
+                println!(
+                    "Migrated KWallet '{name}' ({n_items} items) to {}.",
+                    target_path.display()
+                );
             }
         }
 

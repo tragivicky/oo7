@@ -119,6 +119,25 @@ impl UnlockedKeyring {
         })
     }
 
+    /// Load a v0 (legacy gnome-keyring) file and migrate it to v1 format.
+    ///
+    /// The migrated keyring will be written to `target_path` when
+    /// [`write()`](Self::write) is called.
+    ///
+    /// # Arguments
+    ///
+    /// * `source` - Path to the legacy v0 keyring file.
+    /// * `target_path` - Where the v1 keyring should be stored.
+    /// * `secret` - The encryption secret, or `None` for unencrypted keyrings.
+    pub async fn load_from_v0(
+        source: impl AsRef<Path>,
+        target_path: impl Into<PathBuf>,
+        secret: Option<Secret>,
+    ) -> Result<Self, Error> {
+        let mut file = fs::File::open(source.as_ref()).await?;
+        Self::migrate(&mut file, target_path.into(), secret).await
+    }
+
     #[cfg_attr(feature = "tracing", tracing::instrument(skip(file, secret), fields(path = ?path.as_ref())))]
     async fn migrate(
         file: &mut fs::File,
