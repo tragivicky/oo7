@@ -23,7 +23,7 @@ use zbus::{
 };
 
 #[cfg(any(feature = "gnome_native_crypto", feature = "gnome_openssl_crypto"))]
-pub use crate::gnome::internal::{INTERNAL_INTERFACE_PATH, InternalInterface};
+pub use crate::gnome::internal::InternalInterface;
 #[cfg(any(feature = "plasma_native_crypto", feature = "plasma_openssl_crypto"))]
 use crate::plasma::prompter::in_plasma_environment;
 use crate::{
@@ -613,7 +613,7 @@ impl Service {
         connection
             .object_server()
             .at(
-                INTERNAL_INTERFACE_PATH,
+                oo7::dbus::api::Service::PATH.as_deref().unwrap(),
                 InternalInterface::new(service.clone()),
             )
             .await?;
@@ -654,7 +654,7 @@ impl Service {
         connection
             .object_server()
             .at(
-                INTERNAL_INTERFACE_PATH,
+                oo7::dbus::api::Service::PATH.as_deref().unwrap(),
                 InternalInterface::new(service.clone()),
             )
             .await?;

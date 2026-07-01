@@ -17,9 +17,6 @@ use crate::{
     service::Service,
 };
 
-pub const INTERNAL_INTERFACE_PATH: &str =
-    "/org/gnome/keyring/InternalUnsupportedGuiltRiddenInterface";
-
 #[derive(Clone)]
 pub struct InternalInterface {
     service: Service,
@@ -232,7 +229,7 @@ mod tests {
     #[zbus::proxy(
         interface = "org.gnome.keyring.InternalUnsupportedGuiltRiddenInterface",
         default_service = "org.freedesktop.secrets",
-        default_path = "/org/gnome/keyring/InternalUnsupportedGuiltRiddenInterface",
+        default_path = "/org/freedesktop/secrets",
         gen_blocking = false
     )]
     trait InternalInterfaceProxy {
